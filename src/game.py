@@ -29,9 +29,11 @@ class FootballGame:
         self.pass_target = None
         self.pass_step = (0, 0)
         self.pass_cooldown = 0  # Frames of cooldown after passing
-        self.last_pass_player = None
+        self.last_pass_player = None  # Initialize last_pass_player
+        self.last_possession_team = None  # Track the last team to have possession
         self.random_movement_direction = {player: (0, 0) for player in self.players}
         self.random_movement_timer = {player: 0 for player in self.players}
+        self.forced_pass_player = None  # Player forced to pass before moving again
 
     def check_ball_possession(self):
         if self.grace_period > 0 or self.pass_in_progress:
@@ -55,12 +57,27 @@ class FootballGame:
                                 self.ball_carrier = player
                             self.controlled_player = self.ball_carrier
                     self.grace_period = 10
+                    self.last_possession_team = self.ball_carrier.team  # Update last possession team
                     break
+
+        # Ensure the forced pass player maintains possession
+        if self.forced_pass_player:
+            self.ball_carrier = self.forced_pass_player
+            self.controlled_player = self.forced_pass_player
+
+        # Ensure the forced pass player maintains possession
+        if self.forced_pass_player:
+            self.ball_carrier = self.forced_pass_player
+            self.controlled_player = self.forced_pass_player
 
     def move_ball_with_carrier(self):
         if self.ball_carrier and not self.pass_in_progress:
             self.ball.x = self.ball_carrier.x
             self.ball.y = self.ball_carrier.y
+
+            # Check if the ball carrier moves out of bounds
+            if self.ball.x < 50 or self.ball.x > 750 or self.ball.y < 50 or self.ball.y > 550:
+                self.handle_ball_out_of_bounds()
 
     def pass_ball(self, target_position):
         if self.ball_carrier:
@@ -73,6 +90,7 @@ class FootballGame:
             self.last_pass_player = self.ball_carrier
             self.ball_carrier = None
             self.pass_cooldown = 10  # Set cooldown period after passing
+            self.forced_pass_player = None
 
     def update_pass(self):
         if self.pass_in_progress:
@@ -100,6 +118,60 @@ class FootballGame:
                 self.controlled_player = self.find_closest_player()
                 self.pass_cooldown = 0  # Reset cooldown when pass completes
 
+            # Check if the ball leaves the pitch
+            if self.ball.x < 50 or self.ball.x > 750 or self.ball.y < 50 or self.ball.y > 550:
+                self.handle_ball_out_of_bounds()
+
+    def handle_ball_out_of_bounds(self):
+        self.pass_in_progress = False
+        self.grace_period = 10
+        self.ball_carrier = None
+
+        if self.last_possession_team:
+            opposite_team = 'red' if self.last_possession_team == 'blue' else 'blue'
+        else:
+            opposite_team = 'red' if self.controlled_player.team == 'blue' else 'blue'
+
+        # Determine the new spot based on which boundary the ball left
+        if self.ball.y < 50:  # Top boundary
+            self.controlled_player = self.find_closest_player_by_team(opposite_team)
+            self.controlled_player.x, self.controlled_player.y = self.ball.x, 50
+            self.ball.x = self.controlled_player.x
+            self.ball.y = self.controlled_player.y + random.randint(20, 50)
+        elif self.ball.y > 550:  # Bottom boundary
+            self.controlled_player = self.find_closest_player_by_team(opposite_team)
+            self.controlled_player.x, self.controlled_player.y = self.ball.x, 550
+            self.ball.x = self.controlled_player.x
+            self.ball.y = self.controlled_player.y - random.randint(20, 50)
+        elif self.ball.x < 50:  # Left boundary (red side)
+            if self.last_possession_team == 'red':  # Red team kicked out
+                # Blue team gets a corner kick
+                self.controlled_player = self.find_closest_player_by_team('blue')
+                self.controlled_player.x, self.controlled_player.y = 50, 50 if self.ball.y < 300 else 550
+            else:  # Blue team kicked out
+                # Red team gets a goal kick
+                self.controlled_player = self.find_closest_player_by_team('red')
+                self.controlled_player.x, self.controlled_player.y = 80, 300  # Goal kick spot
+            self.ball.x = self.controlled_player.x
+            self.ball.y = self.controlled_player.y
+        elif self.ball.x > 750:  # Right boundary (blue side)
+            if self.last_possession_team == 'blue':  # Blue team kicked out
+                # Red team gets a corner kick
+                self.controlled_player = self.find_closest_player_by_team('red')
+                self.controlled_player.x, self.controlled_player.y = 750, 50 if self.ball.y < 300 else 550
+            else:  # Red team kicked out
+                # Blue team gets a goal kick
+                self.controlled_player = self.find_closest_player_by_team('blue')
+                self.controlled_player.x, self.controlled_player.y = 700, 300  # Goal kick spot
+            self.ball.x = self.controlled_player.x
+            self.ball.y = self.controlled_player.y
+
+        self.ball_carrier = self.controlled_player
+        self.forced_pass_player = self.controlled_player
+
+        # Ensure the player has possession and cannot lose it until they make a pass
+        self.grace_period = 10  # Set grace period to prevent immediate collisions
+
     def find_closest_player(self):
         min_distance = float('inf')
         closest_player = None
@@ -110,7 +182,21 @@ class FootballGame:
                 closest_player = player
         return closest_player
 
+    def find_closest_player_by_team(self, team):
+        min_distance = float('inf')
+        closest_player = None
+        for player in self.players:
+            if player.team == team:
+                distance = math.sqrt((player.x - self.ball.x) ** 2 + (player.y - self.ball.y) ** 2)
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_player = player
+        return closest_player
+
     def move_randomly(self, player):
+        if player == self.forced_pass_player:
+            return
+
         if self.random_movement_timer[player] <= 0:
             directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
             self.random_movement_direction[player] = random.choice(directions)
@@ -145,6 +231,29 @@ class FootballGame:
         pygame.draw.rect(self.screen, (255, 255, 255), pygame.Rect(50, 250, 20, 100), 5)
         pygame.draw.rect(self.screen, (255, 255, 255), pygame.Rect(730, 250, 20, 100), 5)
 
+        # Netting behind goals (aligned with boundary, smaller on Y axis, larger on X axis, with border)
+        pygame.draw.rect(self.screen, (255, 255, 255), pygame.Rect(35, 260, 15, 80), 1)  # Left netting border
+        pygame.draw.rect(self.screen, (255, 255, 255), pygame.Rect(750, 260, 15, 80), 1)  # Right netting border
+
+        for y in range(260, 340, 10):
+            pygame.draw.line(self.screen, (255, 255, 255), (35, y), (50, y), 1)  # Left netting horizontal lines
+            pygame.draw.line(self.screen, (255, 255, 255), (750, y), (765, y), 1)  # Right netting horizontal lines
+
+        for x in range(35, 50, 2):
+            pygame.draw.line(self.screen, (255, 255, 255), (x, 260), (x, 340), 1)  # Left netting vertical lines
+        for x in range(750, 765, 2):
+            pygame.draw.line(self.screen, (255, 255, 255), (x, 260), (x, 340), 1)  # Right netting vertical lines
+
+        # Corner arcs (thicker and extending further out)
+        pygame.draw.arc(self.screen, (255, 255, 255), (15, 15, 70, 70), math.radians(270), math.radians(360),
+                        5)  # Top left
+        pygame.draw.arc(self.screen, (255, 255, 255), (715, 15, 70, 70), math.radians(180), math.radians(270),
+                        5)  # Top right
+        pygame.draw.arc(self.screen, (255, 255, 255), (15, 515, 70, 70), math.radians(0), math.radians(90),
+                        5)  # Bottom left
+        pygame.draw.arc(self.screen, (255, 255, 255), (715, 515, 70, 70), math.radians(90), math.radians(180),
+                        5)  # Bottom right
+
     def run(self):
         while self.running:
             for event in pygame.event.get():
@@ -156,16 +265,16 @@ class FootballGame:
 
             keys = pygame.key.get_pressed()
             direction = (0, 0)
-            if keys[pygame.K_a]:
+            if keys[pygame.K_a] and self.controlled_player != self.forced_pass_player:
                 self.controlled_player.move(-2, 0)  # Increased step size
                 direction = (-2, 0)
-            if keys[pygame.K_d]:
+            if keys[pygame.K_d] and self.controlled_player != self.forced_pass_player:
                 self.controlled_player.move(2, 0)  # Increased step size
                 direction = (2, 0)
-            if keys[pygame.K_w]:
+            if keys[pygame.K_w] and self.controlled_player != self.forced_pass_player:
                 self.controlled_player.move(0, -2)  # Increased step size
                 direction = (0, -2)
-            if keys[pygame.K_s]:
+            if keys[pygame.K_s] and self.controlled_player != self.forced_pass_player:
                 self.controlled_player.move(0, 2)  # Increased step size
                 direction = (0, 2)
 
