@@ -9,7 +9,7 @@ class FootballGame:
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((800, 600))
-        pygame.display.set_caption('2D Football Game')
+        pygame.display.set_caption('Learning Football')
         self.clock = pygame.time.Clock()
         self.running = True
         self.players = [
@@ -22,7 +22,7 @@ class FootballGame:
         ]
         self.ball = Ball(400, 300)
         self.ball_carrier = None
-        self.controlled_player = self.players[0]
+        self.controlled_player = self.players[2]
         self.last_direction = (0, 0)
         self.grace_period = 0  # Frames of grace period
         self.pass_in_progress = False
@@ -34,6 +34,12 @@ class FootballGame:
         self.random_movement_direction = {player: (0, 0) for player in self.players}
         self.random_movement_timer = {player: 0 for player in self.players}
         self.forced_pass_player = None  # Player forced to pass before moving again
+        self.blue_score = 0
+        self.red_score = 0
+        self.restrict_pass_direction = False  # Restrict pass direction during kickoff
+        self.pass_speed = 5  # Adjust as needed
+        self.shoot_speed = 10  # Adjust as needed
+        self.accuracy_factor = 0.1  # Adjust as needed
 
     def check_ball_possession(self):
         if self.grace_period > 0 or self.pass_in_progress:
@@ -64,11 +70,7 @@ class FootballGame:
         if self.forced_pass_player:
             self.ball_carrier = self.forced_pass_player
             self.controlled_player = self.forced_pass_player
-
-        # Ensure the forced pass player maintains possession
-        if self.forced_pass_player:
-            self.ball_carrier = self.forced_pass_player
-            self.controlled_player = self.forced_pass_player
+            self.last_possession_team = self.forced_pass_player.team  # Update last possession team
 
     def move_ball_with_carrier(self):
         if self.ball_carrier and not self.pass_in_progress:
@@ -79,20 +81,39 @@ class FootballGame:
             if self.ball.x < 50 or self.ball.x > 750 or self.ball.y < 50 or self.ball.y > 550:
                 self.handle_ball_out_of_bounds()
 
-    def pass_ball(self, target_position):
+    def kick_ball(self, target_position, is_shot=False):
         if self.ball_carrier:
-            self.pass_in_progress = True
+            if self.forced_pass_player and is_shot:
+                return  # Player in forced pass position can only pass
+
+            speed = self.shoot_speed if is_shot else self.pass_speed
+
+            # Calculate inaccuracy based on distance with cubic scaling
             dx = target_position[0] - self.ball.x
             dy = target_position[1] - self.ball.y
             distance = math.sqrt(dx ** 2 + dy ** 2)
-            self.pass_step = (dx / distance * 8, dy / distance * 8)  # Increased pass speed
+            if is_shot:
+                # Cubic scaling for error
+                error_factor = self.accuracy_factor * (distance / 100) ** 3
+                self.error_x = error_factor
+                self.error_y = error_factor
+            else:
+                self.error_x = 0
+                self.error_y = 0
+
+            self.intended_target = target_position
+            dx = target_position[0] - self.ball.x
+            dy = target_position[1] - self.ball.y
+            distance = math.sqrt(dx ** 2 + dy ** 2)
+            self.pass_step = (dx / distance * speed, dy / distance * speed)
             self.pass_target = target_position
             self.last_pass_player = self.ball_carrier
             self.ball_carrier = None
+            self.pass_in_progress = True
             self.pass_cooldown = 10  # Set cooldown period after passing
             self.forced_pass_player = None
 
-    def update_pass(self):
+    def update_kick(self):
         if self.pass_in_progress:
             self.ball.x += self.pass_step[0]
             self.ball.y += self.pass_step[1]
@@ -131,6 +152,16 @@ class FootballGame:
             opposite_team = 'red' if self.last_possession_team == 'blue' else 'blue'
         else:
             opposite_team = 'red' if self.controlled_player.team == 'blue' else 'blue'
+
+        # Check for goals
+        if self.ball.x < 50 and 260 <= self.ball.y <= 340:  # Left goal (goal for blue)
+            self.blue_score += 1
+            self.reset_after_goal('blue')
+            return
+        elif self.ball.x > 750 and 260 <= self.ball.y <= 340:  # Right goal (goal for red)
+            self.red_score += 1
+            self.reset_after_goal('red')
+            return
 
         # Determine the new spot based on which boundary the ball left
         if self.ball.y < 50:  # Top boundary
@@ -171,6 +202,7 @@ class FootballGame:
 
         # Ensure the player has possession and cannot lose it until they make a pass
         self.grace_period = 10  # Set grace period to prevent immediate collisions
+        self.last_possession_team = self.controlled_player.team  # Update last possession team
 
     def find_closest_player(self):
         min_distance = float('inf')
@@ -261,7 +293,11 @@ class FootballGame:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and not self.pass_in_progress:
                     mouse_x, mouse_y = pygame.mouse.get_pos()
-                    self.pass_ball((mouse_x, mouse_y))
+                    self.kick_ball((mouse_x, mouse_y), is_shot=False)  # Left mouse button for pass
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_SPACE and not self.pass_in_progress and self.controlled_player != self.forced_pass_player:
+                        mouse_x, mouse_y = pygame.mouse.get_pos()
+                        self.kick_ball((mouse_x, mouse_y), is_shot=True)  # Space bar for shooting
 
             keys = pygame.key.get_pressed()
             direction = (0, 0)
@@ -286,13 +322,15 @@ class FootballGame:
 
             self.check_ball_possession()
             self.move_ball_with_carrier()
-            self.update_pass()
+            self.update_kick()
 
             for player in self.players:
                 if player != self.controlled_player:
                     self.move_randomly(player)
 
             self.draw_pitch()
+            self.draw_scoreboard()  # Draw the scoreboard
+            self.draw_trajectory()  # Draw the intended trajectory and possible spread
 
             for player in self.players:
                 player.draw(self.screen)
@@ -301,4 +339,46 @@ class FootballGame:
             self.clock.tick(60)
 
         pygame.quit()
+
+    def reset_after_goal(self, scoring_team):
+        self.ball.x, self.ball.y = 400, 300  # Reset ball to center
+        if scoring_team == 'red':
+            self.controlled_player = self.find_closest_player_by_team('blue')  # Blue team gets possession
+            self.last_possession_team = 'blue'
+        else:
+            self.controlled_player = self.find_closest_player_by_team('red')  # Red team gets possession
+            self.last_possession_team = 'red'
+
+        self.ball_carrier = self.controlled_player
+        self.forced_pass_player = self.controlled_player  # Force pass
+        self.controlled_player.x, self.controlled_player.y = 400, 300  # Place player in the center
+        self.grace_period = 10  # Set grace period to prevent immediate collisions
+        self.restrict_pass_direction = True  # Restrict pass direction
+
+    def draw_scoreboard(self):
+        font = pygame.font.Font(None, 36)
+        score_text = f"Red: {self.red_score}  Blue: {self.blue_score}"
+        text = font.render(score_text, True, (255, 255, 255))
+        self.screen.blit(text, (300, 10))
+
+    def draw_trajectory(self):
+        if self.pass_in_progress and self.intended_target:
+            # Draw the intended trajectory (dotted line)
+            start_pos = (self.ball.x, self.ball.y)
+            end_pos = self.intended_target
+            pygame.draw.line(self.screen, (0, 0, 0), start_pos, end_pos, 1)  # Solid line
+
+            # Draw the possible spread (range curves)
+            if self.error_x and self.error_y:
+                for i in range(1, 6):
+                    factor = i / 5
+                    spread_left = (
+                    self.intended_target[0] - self.error_x * factor, self.intended_target[1] - self.error_y * factor)
+                    spread_right = (
+                    self.intended_target[0] + self.error_x * factor, self.intended_target[1] + self.error_y * factor)
+                    pygame.draw.line(self.screen, (0, 0, 0), start_pos, spread_left, 1)  # Left range line
+                    pygame.draw.line(self.screen, (0, 0, 0), start_pos, spread_right, 1)  # Right range line
+
+
+
 
