@@ -1,6 +1,7 @@
 import pygame
 from src.player import Player
 from src.ball import Ball
+import numpy as np
 import math
 import random
 
@@ -13,9 +14,13 @@ class FootballGame:
         self.clock = pygame.time.Clock()
         self.running = True
         self.players = [
-            Player(100, 300, 'red'),
-            Player(200, 300, 'red'),
-            Player(300, 300, 'red'),
+            Player(100, 200, 'red'),  # Adjusted positions for better spacing
+            Player(200, 200, 'red'),
+            Player(300, 200, 'red'),
+            Player(400, 200, 'red'),
+            Player(500, 200, 'red'),
+            Player(300, 300, 'blue'),  # Adjusted positions for better spacing
+            Player(400, 300, 'blue'),
             Player(500, 300, 'blue'),
             Player(600, 300, 'blue'),
             Player(700, 300, 'blue')
@@ -105,6 +110,9 @@ class FootballGame:
             dx = target_position[0] - self.ball.x
             dy = target_position[1] - self.ball.y
             distance = math.sqrt(dx ** 2 + dy ** 2)
+
+            if distance == 0:
+                return  # Do nothing if the target position is the same as the current position
 
             max_error_x = self.accuracy_factor * distance * (0.2 if not is_shot else 0.5)
             max_error_y = self.accuracy_factor * distance * (0.4 if not is_shot else 1.0)
@@ -408,5 +416,71 @@ class FootballGame:
         if self.pass_in_progress and self.intended_target and self.ellipse_rect:
             pygame.draw.ellipse(self.screen, (0, 0, 0), self.ellipse_rect, 1)
 
+    def reset(self):
+        # Reset player positions
+        self.players = [
+            Player(100, 200, 'red'),  # Adjusted positions for better spacing
+            Player(200, 200, 'red'),
+            Player(300, 200, 'red'),
+            Player(400, 200, 'red'),
+            Player(500, 200, 'red'),
+            Player(300, 300, 'blue'),  # Adjusted positions for better spacing
+            Player(400, 300, 'blue'),
+            Player(500, 300, 'blue'),
+            Player(600, 300, 'blue'),
+            Player(700, 300, 'blue')
+        ]
+        # Reset ball position
+        self.ball = Ball(400, 300)
+        # Reset other game states
+        self.ball_carrier = None
+        self.controlled_player = self.players[2]
+        self.last_direction = (0, 0)
+        self.grace_period = 0
+        self.pass_in_progress = False
+        self.pass_target = None
+        self.pass_step = (0, 0)
+        self.pass_cooldown = 0
+        self.last_pass_player = None
+        self.last_possession_team = None
+        self.random_movement_direction = {player: (0, 0) for player in self.players}
+        self.random_movement_timer = {player: 0 for player in self.players}
+        self.forced_pass_player = None
+        self.blue_score = 0
+        self.red_score = 0
+        self.restrict_pass_direction = False
+        self.kickoff = False
+        self.initial_speed = 0
+        self.current_speed = 0
+        self.deceleration = 0.97
 
+        # Return initial observation for the agent
+        return self.get_observation()
 
+    def get_observation(self):
+        obs = []
+        for player in self.players:
+            obs.extend([player.x / 800, player.y / 600])  # Normalizing positions to [0, 1]
+
+        # Ball position
+        obs.extend([self.ball.x / 800, self.ball.y / 600])  # Normalized ball position
+
+        # Possession status (1 if this player has the ball, 0 otherwise)
+        possession = 1 if self.ball_carrier == self.controlled_player else 0
+        obs.append(possession)
+
+        # Distance from the ball to the goals
+        distance_to_goal_left = self._calculate_distance(self.ball, (0, 300))
+        distance_to_goal_right = self._calculate_distance(self.ball, (800, 300))
+        obs.extend([distance_to_goal_left / 800, distance_to_goal_right / 800])  # Normalizing distances
+
+        observation = np.array(obs)
+        return observation
+
+    def _calculate_distance(self, entity, target_position):
+        return np.sqrt((entity.x - target_position[0]) ** 2 + (entity.y - target_position[1]) ** 2)
+
+    def update(self):
+        self.check_ball_possession()
+        self.move_ball_with_carrier()
+        self.update_kick()
